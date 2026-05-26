@@ -1,0 +1,2 @@
+# astrbot_plugin_bot_friend
+为astrbot设计，让小bot可以互相用对方的提示词聊天
