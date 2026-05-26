@@ -207,42 +207,41 @@ class BotFriendPlugin(Star):
                 return parsed
             return None
 
-        started = False
         name = ""
         content_chain = []
+        start_index = -1
 
-        for comp in chain:
-            if not started:
-                if not hasattr(comp, "text"):
-                    continue
-                parsed = self._parse_forw_text(comp.text)
-                if not parsed:
-                    fallback = self._parse_forw_text(getattr(event, "message_str", ""))
-                    if fallback and fallback[1]:
-                        return fallback
-                    if fallback:
-                        name, text_content_chain = fallback
-                        content_chain.extend(text_content_chain)
-                        started = True
-                        continue
-                    name_only = self._parse_forw_name_only_text(comp.text)
-                    if name_only:
-                        name = name_only
-                        started = True
-                        continue
-                    return None
-
-                name, text_content_chain = parsed
-                content_chain.extend(text_content_chain)
-                started = True
+        for idx, comp in enumerate(chain):
+            if not hasattr(comp, "text"):
                 continue
 
-            content_chain.append(comp)
+            parsed = self._parse_forw_text(comp.text)
+            if parsed:
+                name, text_content_chain = parsed
+                content_chain.extend(text_content_chain)
+                start_index = idx
+                break
+
+            name_only = self._parse_forw_name_only_text(comp.text)
+            if name_only and idx + 1 < len(chain):
+                name = name_only
+                start_index = idx
+                break
+
+            return None
+
+        if start_index == -1:
+            parsed = self._parse_forw_text(getattr(event, "message_str", ""))
+            if parsed and parsed[1]:
+                return parsed
+            return None
+
+        content_chain.extend(chain[start_index + 1:])
 
         if not name or not content_chain:
-            fallback = self._parse_forw_text(getattr(event, "message_str", ""))
-            if fallback and fallback[1]:
-                return fallback
+            parsed = self._parse_forw_text(getattr(event, "message_str", ""))
+            if parsed and parsed[1]:
+                return parsed
             return None
         return name, content_chain
 
