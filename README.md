@@ -1,5 +1,3 @@
-# astrbot_plugin_bot_friend
-为astrbot设计，让小bot可以互相用对方的提示词聊天
 # Bot同类识别器
 
 让 Bot 认识其他 Bot 同类，支持专属提示词、自动识别回复。

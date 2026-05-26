@@ -145,6 +145,48 @@ class BotFriendPlugin(Star):
             pass
         return msg
 
+    def _get_message_chain(self, event: AstrMessageEvent):
+        if hasattr(event, "message_chain") and event.message_chain:
+            return event.message_chain
+        if hasattr(event, "message_obj") and hasattr(event.message_obj, "message"):
+            return event.message_obj.message or []
+        return []
+
+    def _parse_forw_chain(self, event: AstrMessageEvent):
+        """解析 forw 指令，并保留正文后的 Face 等消息组件。"""
+        chain = self._get_message_chain(event)
+        if not chain:
+            return None
+
+        started = False
+        name = ""
+        content_chain = []
+
+        for comp in chain:
+            if not started:
+                if not hasattr(comp, "text"):
+                    continue
+                text = self._strip_my_wake_prefix(comp.text)
+                if not text.startswith("forw"):
+                    return None
+
+                space_idx = text.find(" ", 4)
+                if space_idx == -1:
+                    return None
+
+                name = text[4:space_idx].strip()
+                rest = text[space_idx + 1:].strip()
+                if rest:
+                    content_chain.append(Comp.Plain(rest))
+                started = True
+                continue
+
+            content_chain.append(comp)
+
+        if not name or not content_chain:
+            return None
+        return name, content_chain
+
     def _init_random_cutoff(self, group_id: str, target_qq: str):
         """初始化随机截断值"""
         key = f"{group_id}_{target_qq}"
@@ -254,18 +296,10 @@ class BotFriendPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """forw 走硬拼接直发，不经过大模型。"""
-        msg = self._strip_my_wake_prefix(event.message_str)
-        if not msg.startswith("forw"):
+        parsed = self._parse_forw_chain(event)
+        if not parsed:
             return
-
-        space_idx = msg.find(" ", 4)
-        if space_idx == -1:
-            return
-
-        name = msg[4:space_idx].strip()
-        content = msg[space_idx + 1:].strip()
-        if not name or not content:
-            return
+        name, content_chain = parsed
 
         self._reload_config()
         bot_info = self._find_by_name(name)
@@ -274,14 +308,19 @@ class BotFriendPlugin(Star):
 
         wake_prefix = bot_info.get("wake_prefix", "")
         target_qq = str(bot_info["qq"])
-        logger.info(f"[BotFriend] forw硬转发: {name} -> {content}, 对方唤醒词:{wake_prefix}")
+        logger.info(f"[BotFriend] forw硬转发: {name}, 对方唤醒词:{wake_prefix}")
 
         group_id = event.message_obj.group_id
         if group_id:
             self.auto_reply_counter[f"{group_id}_{target_qq}"] = 0
 
+        if hasattr(content_chain[0], "text"):
+            content_chain[0].text = f"{wake_prefix}{content_chain[0].text or ''}"
+        else:
+            content_chain.insert(0, Comp.Plain(wake_prefix))
+
         event.stop_event()
-        yield event.plain_result(f"{wake_prefix}{content}")
+        yield event.chain_result(content_chain)
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
