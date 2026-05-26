@@ -184,6 +184,20 @@ class BotFriendPlugin(Star):
             content_chain.append(Comp.Plain(rest))
         return name, content_chain
 
+    def _parse_forw_name_only_text(self, text: str):
+        text = self._strip_my_wake_prefix(text, preserve_trailing=True)
+        if not text.startswith("forw"):
+            return None
+
+        name = (text[4:] or "").strip()
+        if not name:
+            return None
+
+        for known_name in self._get_all_names():
+            if name == known_name:
+                return name
+        return None
+
     def _parse_forw_chain(self, event: AstrMessageEvent):
         """解析 forw 指令，并保留正文后的 Face 等消息组件。"""
         chain = self._get_message_chain(event)
@@ -209,6 +223,11 @@ class BotFriendPlugin(Star):
                     if fallback:
                         name, text_content_chain = fallback
                         content_chain.extend(text_content_chain)
+                        started = True
+                        continue
+                    name_only = self._parse_forw_name_only_text(comp.text)
+                    if name_only:
+                        name = name_only
                         started = True
                         continue
                     return None
