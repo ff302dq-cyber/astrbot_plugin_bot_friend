@@ -1,7 +1,7 @@
 name: astrbot_plugin_bot_friend
 display_name: Bot同类识别器
 desc: 让Bot认识其他Bot同类，支持专属提示词、自动识别回复。
-author: YourName
+author: 彻夜燃烧
 version: 1.0.0
 repo: ""
 support_platforms:
