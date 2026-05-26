@@ -20,7 +20,7 @@ from astrbot.api.event import MessageChain
     "YourName",
     "让Bot认识其他Bot同类，支持专属提示词",
     "1.0.0",
-    "https://github.com/YourName/astrbot_plugin_bot_friend"
+    "https://github.com/ff302dq-cyber/astrbot_plugin_bot_friend"
 )
 class BotFriendPlugin(Star):
 
@@ -125,9 +125,10 @@ class BotFriendPlugin(Star):
             pass
         return "/"
 
-    def _strip_my_wake_prefix(self, msg: str) -> str:
+    def _strip_my_wake_prefix(self, msg: str, preserve_trailing: bool = False) -> str:
         """兼容事件阶段里消息可能带唤醒词或已去掉唤醒词。"""
-        msg = (msg or "").strip()
+        msg = msg or ""
+        msg = msg.lstrip() if preserve_trailing else msg.strip()
         try:
             astrbot_config = self.context.get_config()
             wake_prefix = astrbot_config.get("wake_prefix", "/")
@@ -140,7 +141,8 @@ class BotFriendPlugin(Star):
 
             for prefix in sorted(prefixes, key=len, reverse=True):
                 if msg.startswith(prefix):
-                    return msg[len(prefix):].strip()
+                    stripped = msg[len(prefix):]
+                    return stripped.lstrip() if preserve_trailing else stripped.strip()
         except Exception:
             pass
         return msg
@@ -152,10 +154,43 @@ class BotFriendPlugin(Star):
             return event.message_obj.message or []
         return []
 
+    def _parse_forw_header(self, text: str):
+        tail = text[4:] or ""
+        if not tail:
+            return None
+
+        space_match = re.search(r"\s+", tail)
+        if not space_match:
+            return None
+
+        name = tail[:space_match.start()].strip()
+        rest = tail[space_match.end():].strip()
+        if not name:
+            return None
+        return name, rest
+
+    def _parse_forw_text(self, text: str):
+        text = self._strip_my_wake_prefix(text, preserve_trailing=True)
+        if not text.startswith("forw"):
+            return None
+
+        parsed = self._parse_forw_header(text)
+        if not parsed:
+            return None
+
+        name, rest = parsed
+        content_chain = []
+        if rest:
+            content_chain.append(Comp.Plain(rest))
+        return name, content_chain
+
     def _parse_forw_chain(self, event: AstrMessageEvent):
         """解析 forw 指令，并保留正文后的 Face 等消息组件。"""
         chain = self._get_message_chain(event)
         if not chain:
+            parsed = self._parse_forw_text(getattr(event, "message_str", ""))
+            if parsed and parsed[1]:
+                return parsed
             return None
 
         started = False
@@ -166,26 +201,46 @@ class BotFriendPlugin(Star):
             if not started:
                 if not hasattr(comp, "text"):
                     continue
-                text = self._strip_my_wake_prefix(comp.text)
-                if not text.startswith("forw"):
+                parsed = self._parse_forw_text(comp.text)
+                if not parsed:
+                    fallback = self._parse_forw_text(getattr(event, "message_str", ""))
+                    if fallback and fallback[1]:
+                        return fallback
+                    if fallback:
+                        name, text_content_chain = fallback
+                        content_chain.extend(text_content_chain)
+                        started = True
+                        continue
                     return None
 
-                space_idx = text.find(" ", 4)
-                if space_idx == -1:
-                    return None
-
-                name = text[4:space_idx].strip()
-                rest = text[space_idx + 1:].strip()
-                if rest:
-                    content_chain.append(Comp.Plain(rest))
+                name, text_content_chain = parsed
+                content_chain.extend(text_content_chain)
                 started = True
                 continue
 
             content_chain.append(comp)
 
         if not name or not content_chain:
+            fallback = self._parse_forw_text(getattr(event, "message_str", ""))
+            if fallback and fallback[1]:
+                return fallback
             return None
         return name, content_chain
+
+    def _is_forw_command_text(self, text: str) -> bool:
+        return self._strip_my_wake_prefix(text).startswith("forw")
+
+    def _prepend_reply_to_chain(self, event: AstrMessageEvent, chain: list) -> bool:
+        try:
+            msg_id = event.message_obj.message_id
+            if not msg_id:
+                return False
+            if any(isinstance(comp, Comp.Reply) for comp in chain):
+                return False
+            chain.insert(0, Comp.Reply(id=str(msg_id)))
+            return True
+        except Exception:
+            return False
 
     def _init_random_cutoff(self, group_id: str, target_qq: str):
         """初始化随机截断值"""
@@ -296,12 +351,12 @@ class BotFriendPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """forw 走硬拼接直发，不经过大模型。"""
+        self._reload_config()
         parsed = self._parse_forw_chain(event)
         if not parsed:
             return
         name, content_chain = parsed
 
-        self._reload_config()
         bot_info = self._find_by_name(name)
         if not bot_info:
             return
@@ -318,6 +373,8 @@ class BotFriendPlugin(Star):
             content_chain[0].text = f"{wake_prefix}{content_chain[0].text or ''}"
         else:
             content_chain.insert(0, Comp.Plain(wake_prefix))
+
+        self._prepend_reply_to_chain(event, content_chain)
 
         event.stop_event()
         yield event.chain_result(content_chain)
@@ -354,7 +411,8 @@ class BotFriendPlugin(Star):
 
         # ========== 功能1: 处理 tell/forw 命令 ==========
         if msg.startswith("forw"):
-            # forw 已在 on_message 中硬拼接直发，这里不再让 LLM 参与。
+            # forw 应该已在 on_message 中硬拼接直发；如果漏到这里，直接截断，避免 LLM 拒绝或乱回。
+            event.stop_event()
             return
 
         elif msg.startswith("tell"):
