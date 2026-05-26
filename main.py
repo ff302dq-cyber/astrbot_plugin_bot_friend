@@ -19,7 +19,7 @@ from astrbot.api.event import MessageChain
     "bot_friend_recognizer",
     "YourName",
     "让Bot认识其他Bot同类，支持专属提示词",
-    "1.0.0",
+    "4.2",
     "https://github.com/ff302dq-cyber/astrbot_plugin_bot_friend"
 )
 class BotFriendPlugin(Star):
@@ -148,11 +148,33 @@ class BotFriendPlugin(Star):
         return msg
 
     def _get_message_chain(self, event: AstrMessageEvent):
+        if hasattr(event, "message_obj") and hasattr(event.message_obj, "message"):
+            message = event.message_obj.message or []
+            if message:
+                return message
         if hasattr(event, "message_chain") and event.message_chain:
             return event.message_chain
-        if hasattr(event, "message_obj") and hasattr(event.message_obj, "message"):
-            return event.message_obj.message or []
         return []
+
+    def _is_forw_like_event(self, event: AstrMessageEvent) -> bool:
+        if self._strip_my_wake_prefix(getattr(event, "message_str", "")).startswith("forw"):
+            return True
+        for comp in self._get_message_chain(event):
+            if hasattr(comp, "text") and self._strip_my_wake_prefix(comp.text).startswith("forw"):
+                return True
+        return False
+
+    def _format_chain_summary(self, chain) -> str:
+        parts = []
+        for comp in chain:
+            comp_type = comp.__class__.__name__
+            if hasattr(comp, "text"):
+                parts.append(f"{comp_type}({repr(comp.text)})")
+            elif hasattr(comp, "id"):
+                parts.append(f"{comp_type}(id={getattr(comp, 'id', None)})")
+            else:
+                parts.append(comp_type)
+        return " -> ".join(parts)
 
     def _parse_forw_header(self, text: str):
         tail = text[4:] or ""
@@ -366,12 +388,18 @@ class BotFriendPlugin(Star):
     #  功能1 & 2: tell/forw 命令处理 + 自动识别bot同类
     # ============================================================
 
-    @filter.event_message_type(filter.EventMessageType.ALL)
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=1000)
     async def on_message(self, event: AstrMessageEvent):
         """forw 走硬拼接直发，不经过大模型。"""
         self._reload_config()
         parsed = self._parse_forw_chain(event)
         if not parsed:
+            if self._is_forw_like_event(event):
+                logger.warning(
+                    "[BotFriend] 疑似forw但未解析成功: "
+                    f"message_str={repr(getattr(event, 'message_str', ''))}, "
+                    f"chain={self._format_chain_summary(self._get_message_chain(event))}"
+                )
             return
         name, content_chain = parsed
 
