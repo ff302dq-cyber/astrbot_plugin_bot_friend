@@ -1,0 +1,140 @@
+{
+  "reply_format_prompt": {
+    "description": "统一回复格式提示词",
+    "type": "text",
+    "hint": "规定bot回复的格式，会应用到所有对话",
+    "default": "你的回复必须自然并严格遵守人物关系。回复严禁超过30字，不得含有任何加粗、格式、emoji、markdown。"
+  },
+  "max_auto_rounds": {
+    "description": "每轮最大自动回复次数",
+    "type": "int",
+    "hint": "两个bot之间最多自动来回几次。防止无限循环。设为0则不自动回复。",
+    "default": 1
+  },
+  "min_auto_rounds": {
+    "description": "随机截断最小轮数",
+    "type": "int",
+    "hint": "对话将在 min_auto_rounds+1 到 max_auto_rounds 之间随机截断。设为0则不随机截断。",
+    "default": 4
+  },
+  "bot_friend_1": {
+    "description": "Bot同类 ①",
+    "type": "object",
+    "items": {
+      "qq": {
+        "description": "QQ号",
+        "type": "string",
+        "hint": "对方bot的QQ号，留空表示不用这个槽位",
+        "default": ""
+      },
+      "names": {
+        "description": "名字（多个用英文逗号隔开）",
+        "type": "string",
+        "hint": "用于指令中，比如填 小饼,丙火 就可以用 /tell小饼 或 /tell丙火",
+        "default": ""
+      },
+      "wake_prefix": {
+        "description": "唤醒词",
+        "type": "string",
+        "hint": "该bot的唤醒词，回复时会在句首加上。例如填 - 则回复如 -你好",
+        "default": ""
+      },
+      "prompt": {
+        "description": "专属提示词",
+        "type": "text",
+        "hint": "让bot知道怎么和这位同类相处",
+        "default": ""
+      }
+    }
+  },
+  "bot_friend_2": {
+    "description": "Bot同类 ②",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_3": {
+    "description": "Bot同类 ③",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_4": {
+    "description": "Bot同类 ④",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_5": {
+    "description": "Bot同类 ⑤",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_6": {
+    "description": "Bot同类 ⑥",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_7": {
+    "description": "Bot同类 ⑦",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_8": {
+    "description": "Bot同类 ⑧",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_9": {
+    "description": "Bot同类 ⑨",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  },
+  "bot_friend_10": {
+    "description": "Bot同类 ⑩",
+    "type": "object",
+    "items": {
+      "qq": { "description": "QQ号", "type": "string", "default": "" },
+      "names": { "description": "名字（多个用英文逗号隔开）", "type": "string", "default": "" },
+      "wake_prefix": { "description": "唤醒词", "type": "string", "default": "" },
+      "prompt": { "description": "专属提示词", "type": "text", "default": "" }
+    }
+  }
+}
