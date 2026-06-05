@@ -19,7 +19,7 @@ from astrbot.api.event import MessageChain
     "bot_friend_recognizer",
     "YourName",
     "让Bot认识其他Bot同类，支持专属提示词",
-    "4.2",
+    "4.3",
     "https://github.com/ff302dq-cyber/astrbot_plugin_bot_friend"
 )
 class BotFriendPlugin(Star):
@@ -74,8 +74,6 @@ class BotFriendPlugin(Star):
                 "wake_prefix": wake_prefix,
                 "prompt": prompt
             })
-            logger.info(f"[Bot同类] 加载同类: {'/'.join(names)} (QQ:{qq}, 唤醒词:{wake_prefix or '无'})")
-
         return friends
 
     def _reload_config(self):
