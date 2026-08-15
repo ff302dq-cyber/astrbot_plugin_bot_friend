@@ -4,22 +4,33 @@ AstrBot 插件：Bot同类识别器
 """
 
 import re
-import random
-from collections import defaultdict
 
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
-from astrbot.api.provider import ProviderRequest
-from astrbot.api import logger, AstrBotConfig
 import astrbot.api.message_components as Comp
-from astrbot.api.event import MessageChain
+from astrbot.api import AstrBotConfig, logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
+from astrbot.api.star import Context, Star, register
+
+from .dialogue_director import (
+    DialogueState,
+    assess_reply,
+    build_director_prompt,
+    choose_cutoff,
+    normalize_round_limits,
+    parse_directed_output,
+)
+
+DEFAULT_REPLY_FORMAT_PROMPT = (
+    "你的回复必须自然并严格遵守人物关系。正文通常12至30字，最多40字、"
+    "最多两个短句，不得含有加粗、emoji或markdown。"
+)
 
 
 @register(
     "bot_friend_recognizer",
     "YourName",
     "让Bot认识其他Bot同类，支持专属提示词",
-    "4.3",
+    "4.4",
     "https://github.com/ff302dq-cyber/astrbot_plugin_bot_friend"
 )
 class BotFriendPlugin(Star):
@@ -27,14 +38,10 @@ class BotFriendPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.bot_friends = self._parse_bot_friends()
-        self.auto_reply_counter = defaultdict(int)
-        self.max_auto_rounds = int(self.config.get("max_auto_rounds", 10))
-        self.min_auto_rounds = int(self.config.get("min_auto_rounds", 3))
-        self.reply_format_prompt = self.config.get("reply_format_prompt",
-            "你的回复必须自然并严格遵守人物关系。回复严禁超过20字，不得含有任何加粗、格式、emoji、markdown。")
-        # 记录每组对话的随机截断值
-        self.random_cutoff = {}
+        self.bot_friends = []
+        self.dialogue_states: dict[str, DialogueState] = {}
+        self._last_round_warning: tuple[int, int] | None = None
+        self._reload_config()
         logger.info(f"[Bot同类] 插件已加载，同类数: {len(self.bot_friends)}")
 
     # ============================================================
@@ -79,10 +86,24 @@ class BotFriendPlugin(Star):
     def _reload_config(self):
         """重新加载配置"""
         self.bot_friends = self._parse_bot_friends()
-        self.max_auto_rounds = int(self.config.get("max_auto_rounds", 10))
-        self.min_auto_rounds = int(self.config.get("min_auto_rounds", 3))
-        self.reply_format_prompt = self.config.get("reply_format_prompt",
-            "你的回复必须自然并严格遵守人物关系。回复严禁超过20字，不得含有任何加粗、格式、emoji、markdown。")
+        raw_max = int(self.config.get("max_auto_rounds", 4))
+        raw_min = int(self.config.get("min_auto_rounds", 1))
+        self.min_auto_rounds, self.max_auto_rounds = normalize_round_limits(
+            raw_min, raw_max
+        )
+        if raw_max > 0 and raw_min > 0 and raw_min > raw_max:
+            warning_key = (raw_min, raw_max)
+            if self._last_round_warning != warning_key:
+                logger.warning(
+                    "[BotFriend] min_auto_rounds 大于 max_auto_rounds，"
+                    "已将两项配置作为范围端点，"
+                    f"按 {self.min_auto_rounds}～{self.max_auto_rounds} 轮随机处理"
+                )
+                self._last_round_warning = warning_key
+        self.reply_format_prompt = str(
+            self.config.get("reply_format_prompt", DEFAULT_REPLY_FORMAT_PROMPT)
+            or DEFAULT_REPLY_FORMAT_PROMPT
+        ).strip()
 
     def _find_by_name(self, name: str):
         for bot in self.bot_friends:
@@ -119,8 +140,8 @@ class BotFriendPlugin(Star):
                 return str(wake_prefix[0])
             elif isinstance(wake_prefix, str) and wake_prefix:
                 return wake_prefix
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 兼容不同 AstrBot 配置对象
+            logger.debug(f"[BotFriend] 获取当前唤醒词失败: {exc}")
         return "/"
 
     def _strip_my_wake_prefix(self, msg: str, preserve_trailing: bool = False) -> str:
@@ -141,8 +162,8 @@ class BotFriendPlugin(Star):
                 if msg.startswith(prefix):
                     stripped = msg[len(prefix):]
                     return stripped.lstrip() if preserve_trailing else stripped.strip()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - 兼容不同 AstrBot 配置对象
+            logger.debug(f"[BotFriend] 去除当前唤醒词失败: {exc}")
         return msg
 
     def _get_message_chain(self, event: AstrMessageEvent):
@@ -153,6 +174,16 @@ class BotFriendPlugin(Star):
         if hasattr(event, "message_chain") and event.message_chain:
             return event.message_chain
         return []
+
+    def _get_event_text(self, event: AstrMessageEvent) -> str:
+        text = "".join(
+            str(comp.text or "")
+            for comp in self._get_message_chain(event)
+            if hasattr(comp, "text")
+        )
+        if text:
+            return text
+        return str(getattr(event, "message_str", "") or "")
 
     def _is_forw_like_event(self, event: AstrMessageEvent) -> bool:
         if self._strip_my_wake_prefix(getattr(event, "message_str", "")).startswith("forw"):
@@ -167,7 +198,7 @@ class BotFriendPlugin(Star):
         for comp in chain:
             comp_type = comp.__class__.__name__
             if hasattr(comp, "text"):
-                parts.append(f"{comp_type}({repr(comp.text)})")
+                parts.append(f"{comp_type}({comp.text!r})")
             elif hasattr(comp, "id"):
                 parts.append(f"{comp_type}(id={getattr(comp, 'id', None)})")
             else:
@@ -277,28 +308,102 @@ class BotFriendPlugin(Star):
                 return False
             chain.insert(0, Comp.Reply(id=str(msg_id)))
             return True
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - 消息组件版本差异时跳过引用
+            logger.debug(f"[BotFriend] 添加引用消息失败: {exc}")
             return False
 
-    def _init_random_cutoff(self, group_id: str, target_qq: str):
-        """初始化随机截断值"""
-        key = f"{group_id}_{target_qq}"
-        if key not in self.random_cutoff:
-            if self.min_auto_rounds > 0 and self.max_auto_rounds > self.min_auto_rounds:
-                self.random_cutoff[key] = random.randint(self.min_auto_rounds + 1, self.max_auto_rounds)
-            else:
-                self.random_cutoff[key] = self.max_auto_rounds
-            logger.info(f"[BotFriend] 群{group_id}与{target_qq}的随机截断轮数: {self.random_cutoff[key]}")
-        return self.random_cutoff[key]
+    @staticmethod
+    def _conversation_key(group_id: str, target_qq: str) -> str:
+        scope = str(group_id or "private")
+        return f"{scope}_{target_qq}"
+
+    def _new_dialogue_state(self, unlimited: bool = False) -> DialogueState:
+        return DialogueState(
+            cutoff_round=(
+                0
+                if unlimited
+                else choose_cutoff(
+                    self.min_auto_rounds,
+                    self.max_auto_rounds,
+                )
+            )
+        )
+
+    def _reset_dialogue(self, key: str, unlimited: bool = False) -> DialogueState:
+        state = self._new_dialogue_state(unlimited=unlimited)
+        self.dialogue_states[key] = state
+        logger.info(f"[BotFriend] 对话状态已重置 key={key}, 轮数={state.cutoff_round}")
+        return state
+
+    def _get_dialogue_state(
+        self, key: str, unlimited: bool = False
+    ) -> DialogueState:
+        state = self.dialogue_states.get(key)
+        if state is None:
+            state = self._reset_dialogue(key, unlimited=unlimited)
+        return state
+
+    @staticmethod
+    def _plain_text_from_chain(chain: list) -> str:
+        return "".join(
+            str(comp.text or "") for comp in chain if hasattr(comp, "text")
+        ).strip()
+
+    def _mark_directed_response(
+        self,
+        event: AstrMessageEvent,
+        key: str,
+        auto_reply: bool,
+        current_round: int = 0,
+    ) -> None:
+        event._bot_friend_directed_response = True
+        event._bot_friend_state_key = key
+        event._bot_friend_auto_reply = auto_reply
+        event._bot_friend_current_round = current_round
+
+    def _apply_directed_output(self, event: AstrMessageEvent) -> tuple[str, str]:
+        """解析隐藏动作标签，只把reply正文留在最终消息链中。"""
+        if not getattr(event, "_bot_friend_directed_response", False):
+            return "", ""
+        result = event.get_result()
+        if not result or not result.chain:
+            return "", ""
+
+        text_components = [comp for comp in result.chain if hasattr(comp, "text")]
+        if not text_components:
+            return "", ""
+        raw_text = "".join(str(comp.text or "") for comp in text_components)
+        action, reply = parse_directed_output(raw_text, max_chars=40)
+        text_components[0].text = reply
+        for comp in text_components[1:]:
+            comp.text = ""
+        result.chain = [
+            comp
+            for comp in result.chain
+            if not (hasattr(comp, "text") and not str(comp.text or "").strip())
+        ]
+
+        key = str(getattr(event, "_bot_friend_state_key", "") or "")
+        state = self.dialogue_states.get(key)
+        if state is not None and reply:
+            state.correction = assess_reply(reply, state)
+            state.add_message("B", reply)
+            if action != "未标注":
+                state.recent_actions.append(action)
+        logger.info(
+            f"[BotFriend] 导演输出 action={action}, reply={reply!r}, "
+            f"correction={(state.correction if state else '')!r}"
+        )
+        return action, reply
 
     def _mark_force_prefix(self, event: AstrMessageEvent, wake_prefix: str):
         """记录本次回复必须带上的唤醒词前缀。"""
         if wake_prefix:
-            setattr(event, "_bot_friend_force_prefix", wake_prefix)
+            event._bot_friend_force_prefix = wake_prefix
 
     def _mark_no_segmented_reply(self, event: AstrMessageEvent):
         """标记本次回复不走 AstrBot 的 LLM 正则分段。"""
-        setattr(event, "_bot_friend_no_segmented_reply", True)
+        event._bot_friend_no_segmented_reply = True
 
     def _disable_segmented_reply_for_result(self, event: AstrMessageEvent) -> bool:
         """把本次结果标记为普通结果，避开 only_llm_result 分段。"""
@@ -318,7 +423,7 @@ class BotFriendPlugin(Star):
                 result.result_content_type = ResultContentType.GENERAL_RESULT
             logger.info("[BotFriend] 已将本次 tell/forw 回复标记为不参与 LLM 分段")
             return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - 兼容 AstrBot 不同结果类型
             logger.warning(f"[BotFriend] 禁用本次分段回复失败: {e}")
             return False
 
@@ -344,7 +449,7 @@ class BotFriendPlugin(Star):
             result.chain.insert(0, Comp.Plain(wake_prefix))
             logger.info(f"[BotFriend] 已插入同类唤醒词前缀: {wake_prefix}")
             return True
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - 兼容不同消息组件实现
             logger.warning(f"[BotFriend] 硬性补充唤醒词失败: {e}")
             return False
 
@@ -395,7 +500,7 @@ class BotFriendPlugin(Star):
             if self._is_forw_like_event(event):
                 logger.warning(
                     "[BotFriend] 疑似forw但未解析成功: "
-                    f"message_str={repr(getattr(event, 'message_str', ''))}, "
+                    f"message_str={getattr(event, 'message_str', '')!r}, "
                     f"chain={self._format_chain_summary(self._get_message_chain(event))}"
                 )
             return
@@ -410,8 +515,9 @@ class BotFriendPlugin(Star):
         logger.info(f"[BotFriend] forw硬转发: {name}, 对方唤醒词:{wake_prefix}")
 
         group_id = event.message_obj.group_id
-        if group_id:
-            self.auto_reply_counter[f"{group_id}_{target_qq}"] = 0
+        state_key = self._conversation_key(group_id, target_qq)
+        state = self._reset_dialogue(state_key, unlimited=not bool(group_id))
+        state.add_message("B", self._plain_text_from_chain(content_chain))
 
         if hasattr(content_chain[0], "text"):
             content_chain[0].text = f"{wake_prefix}{content_chain[0].text or ''}"
@@ -430,28 +536,15 @@ class BotFriendPlugin(Star):
         1. tell{名字} {内容} 和 forw{名字} {内容} 命令
         2. 自动识别同类bot的消息并注入提示词
         """
-        # 尝试多种方式获取消息内容
-        msg = ""
         try:
-            # 优先尝试 message_chain
-            if hasattr(event, 'message_chain'):
-                for comp in event.message_chain:
-                    if hasattr(comp, 'text'):
-                        msg += comp.text
-            # 其次尝试 message_str
-            elif hasattr(event, 'message_str'):
-                msg = event.message_str
-            # 最后尝试 message_obj
-            elif hasattr(event, 'message_obj') and hasattr(event.message_obj, 'message'):
-                for comp in event.message_obj.message:
-                    if hasattr(comp, 'text'):
-                        msg += comp.text
-        except Exception as e:
+            msg = self._get_event_text(event)
+        except Exception as e:  # noqa: BLE001 - 兼容 AstrBot 不同事件对象
             logger.warning(f"[BotFriend] 获取消息内容失败: {e}")
+            msg = str(getattr(event, "message_str", "") or "")
 
         msg = self._strip_my_wake_prefix(msg)
 
-        logger.info(f"[BotFriend] 收到消息: {msg}, repr: {repr(msg)}")
+        logger.info(f"[BotFriend] 收到消息: {msg}, repr: {msg!r}")
 
         # ========== 功能1: 处理 tell/forw 命令 ==========
         if msg.startswith("forw"):
@@ -474,24 +567,30 @@ class BotFriendPlugin(Star):
                         target_qq = str(bot_info["qq"])
                         logger.info(f"[BotFriend] tell命令: {name} -> {content}, 对方唤醒词:{wake_prefix}")
                         addition = ""
-                        if self.reply_format_prompt:
-                            addition += f"\n\n{self.reply_format_prompt}"
                         if friend_prompt:
                             addition += f"\n\n【同类关系提示】{friend_prompt}"
+                        if self.reply_format_prompt:
+                            addition += f"\n\n{self.reply_format_prompt}"
                         addition += (
                             f"\n\n【当前任务】你要对朋友「{name}」说话。"
-                            f"你的回复必须以「{wake_prefix}」开头，这是对方的唤醒词。"
-                            f"重要：直接说出你想说的话，不要添加任何转述、不要说\"用户说\"、\"告诉你\"之类的。"
-                            f"比如用户给\"你是大笨蛋\"，你应该直接说\"{wake_prefix}你是大笨蛋\"或\"{wake_prefix}你真笨\"，"
-                            f"而不是\"用户说你是大笨蛋\"。"
+                            "直接生成要说的正文，不要转述用户指令，不要解释任务。"
+                            "唤醒词由代码添加，正文中不要重复唤醒词。"
+                            "最终语气、态度和行为必须服从上方专属关系提示词。"
                         )
                         req.system_prompt += addition
                         self._mark_force_prefix(event, wake_prefix)
                         self._mark_no_segmented_reply(event)
-                        # 重置自动回复计数
                         group_id = event.message_obj.group_id
-                        if group_id:
-                            self.auto_reply_counter[f"{group_id}_{target_qq}"] = 0
+                        state_key = self._conversation_key(group_id, target_qq)
+                        self._reset_dialogue(
+                            state_key,
+                            unlimited=not bool(group_id),
+                        )
+                        self._mark_directed_response(
+                            event,
+                            state_key,
+                            auto_reply=False,
+                        )
                         return
 
         # ========== 功能2: 自动识别同类bot ==========
@@ -504,6 +603,32 @@ class BotFriendPlugin(Star):
             friend_prompt = bot_info.get("prompt", "")
             sender_wake = bot_info.get("wake_prefix", "")  # 发送者的唤醒词，回复时要用这个
             name_str = "、".join(names)
+            group_id = event.message_obj.group_id
+            state_key = self._conversation_key(group_id, sender_id)
+            state = self._get_dialogue_state(
+                state_key,
+                unlimited=not bool(group_id),
+            )
+            if group_id and state.cutoff_round == 0:
+                logger.info(f"[BotFriend] 群{group_id}自动回复已关闭")
+                event.stop_event()
+                return
+            if group_id and (
+                state.finished or state.completed_rounds >= state.cutoff_round
+            ):
+                state.finished = True
+                logger.info(
+                    f"[BotFriend] key={state_key} 已完成{state.cutoff_round}轮，"
+                    "不再继续自动回复"
+                )
+                event.stop_event()
+                return
+
+            state.add_message("A", msg)
+            next_round = state.completed_rounds + 1
+            is_final_round = bool(
+                group_id and next_round == state.cutoff_round
+            )
             addition = (
                 f"\n\n【同类关系提示】当前和你说话的是你的同类「{name_str}」。"
             )
@@ -511,14 +636,29 @@ class BotFriendPlugin(Star):
                 addition += friend_prompt
             if self.reply_format_prompt:
                 addition += f"\n\n{self.reply_format_prompt}"
+            addition += "\n\n" + build_director_prompt(
+                state,
+                next_round=next_round,
+                is_final_round=is_final_round,
+            )
             if sender_wake:
                 addition += (
-                    f"\n重要：你的回复必须以「{sender_wake}」开头，这是对方的唤醒词，用来继续对话。"
+                    f"\n唤醒词「{sender_wake}」由代码添加，reply中不要重复。"
                 )
                 self._mark_force_prefix(event, sender_wake)
                 self._mark_no_segmented_reply(event)
+            self._mark_directed_response(
+                event,
+                state_key,
+                auto_reply=True,
+                current_round=next_round,
+            )
             req.system_prompt += addition
-            logger.info(f"[Bot同类] 检测到同类「{name_str}」的消息，回复将添加唤醒词前缀「{sender_wake}」")
+            logger.info(
+                f"[Bot同类] 检测到同类「{name_str}」，"
+                f"自动回复第{next_round}/{state.cutoff_round or '∞'}轮，"
+                f"前缀「{sender_wake}」"
+            )
 
     # ============================================================
     #  功能3: 处理自动回复的对话轮数限制和随机截断
@@ -530,13 +670,13 @@ class BotFriendPlugin(Star):
         检查是否需要截断对话，并处理轮数限制
         """
         sender_id = str(event.get_sender_id())
-        msg = event.message_str.strip()
 
         result = event.get_result()
         if not result or not result.chain:
             return
 
         self._disable_segmented_reply_for_result(event)
+        self._apply_directed_output(event)
 
         forced_prefix = getattr(event, "_bot_friend_force_prefix", "")
 
@@ -550,37 +690,30 @@ class BotFriendPlugin(Star):
         group_id = event.message_obj.group_id
         if not group_id:
             wake_prefix = forced_prefix or bot_info.get("wake_prefix", "")
+            state_key = str(getattr(event, "_bot_friend_state_key", "") or "")
+            state = self.dialogue_states.get(state_key)
+            if state is not None and getattr(
+                event, "_bot_friend_auto_reply", False
+            ):
+                state.completed_rounds += 1
             self._ensure_result_prefix(event, wake_prefix)
             self._strip_trailing_wake_prefix(event, wake_prefix)
             return  # 非群聊不处理
 
-        target_qq = str(bot_info["qq"])
-        counter_key = f"{group_id}_{target_qq}"
-
-        # 初始化随机截断值
-        cutoff_rounds = self._init_random_cutoff(group_id, target_qq)
-
-        # 增加计数
-        self.auto_reply_counter[counter_key] += 1
-        current_round = self.auto_reply_counter[counter_key]
+        state_key = str(getattr(event, "_bot_friend_state_key", "") or "")
+        state = self.dialogue_states.get(state_key)
+        current_round = int(
+            getattr(event, "_bot_friend_current_round", 0) or 0
+        )
+        if state is not None and getattr(event, "_bot_friend_auto_reply", False):
+            state.completed_rounds = max(state.completed_rounds, current_round)
+            if state.completed_rounds >= state.cutoff_round:
+                state.finished = True
 
         logger.info(
             f"[BotFriend] 与{bot_info['names'][0]}自动回复第"
-            f"{current_round}/{cutoff_rounds}轮"
+            f"{current_round}/{state.cutoff_round if state else '?'}轮"
         )
-
-        # 检查是否超过截断轮数
-        if current_round >= cutoff_rounds:
-            logger.info(
-                f"[BotFriend] 群{group_id}与{target_qq}达到截断轮数({cutoff_rounds}轮)，停止自动回复"
-            )
-            # 清空消息链，阻止回复
-            result.chain = []
-            # 清除计数，下次对话重新开始
-            self.auto_reply_counter[counter_key] = 0
-            if counter_key in self.random_cutoff:
-                del self.random_cutoff[counter_key]
-            return
 
         wake_prefix = forced_prefix or bot_info.get("wake_prefix", "")
         self._ensure_result_prefix(event, wake_prefix)
@@ -621,8 +754,7 @@ class BotFriendPlugin(Star):
     @filter.command("重置bot对话")
     async def reset_counter(self, event: AstrMessageEvent):
         """管理员指令：重置自动回复计数"""
-        self.auto_reply_counter.clear()
-        self.random_cutoff.clear()
+        self.dialogue_states.clear()
         yield event.plain_result("已重置所有群的bot对话轮数～")
 
     async def terminate(self):

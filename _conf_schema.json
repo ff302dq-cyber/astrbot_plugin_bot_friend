@@ -3,19 +3,19 @@
     "description": "统一回复格式提示词",
     "type": "text",
     "hint": "规定bot回复的格式，会应用到所有对话",
-    "default": "你的回复必须自然并严格遵守人物关系。回复严禁超过30字，不得含有任何加粗、格式、emoji、markdown。"
+    "default": "你的回复必须自然并严格遵守人物关系。正文通常12至30字，最多40字、最多两个短句，不得含有加粗、emoji或markdown。"
   },
   "max_auto_rounds": {
     "description": "每轮最大自动回复次数",
     "type": "int",
     "hint": "两个bot之间最多自动来回几次。防止无限循环。设为0则不自动回复。",
-    "default": 1
+    "default": 4
   },
   "min_auto_rounds": {
     "description": "随机截断最小轮数",
     "type": "int",
-    "hint": "对话将在 min_auto_rounds+1 到 max_auto_rounds 之间随机截断。设为0则不随机截断。",
-    "default": 4
+    "hint": "对话将在 min_auto_rounds 到 max_auto_rounds 之间随机选择总轮数。设为0则固定使用最大轮数。",
+    "default": 1
   },
   "bot_friend_1": {
     "description": "Bot同类 ①",
