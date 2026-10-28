@@ -2,7 +2,7 @@ name: astrbot_plugin_bot_friend
 display_name: Bot同类识别器
 desc: 让Bot认识其他Bot同类，支持专属关系提示、自动识别回复和短对话推进控制。
 author: 彻夜燃烧
-version: "4.5"
+version: "4.5.0"
 repo: "https://github.com/ff302dq-cyber/astrbot_plugin_bot_friend"
 support_platforms:
   - aiocqhttp
