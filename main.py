@@ -3,6 +3,7 @@ AstrBot 插件：Bot同类识别器
 让Bot认识其他Bot同类，支持专属提示词、自动识别回复。
 """
 
+import sys  # ledger patch
 import re
 
 import astrbot.api.message_components as Comp
@@ -513,6 +514,21 @@ class BotFriendPlugin(Star):
         wake_prefix = bot_info.get("wake_prefix", "")
         target_qq = str(bot_info["qq"])
         logger.info(f"[BotFriend] forw硬转发: {name}, 对方唤醒词:{wake_prefix}")
+
+        # ===== 话费账本（ledger patch）：forw 由发起的人付 1 次 =====
+        _lm = sys.modules.get("astrbot_ledger")
+        _lc = getattr(_lm, "client", None) if _lm else None
+        if _lc:
+            _ok, _, _info = await _lc.charge(
+                qq=str(event.get_sender_id()), kind="forw",
+                group_id=str(event.get_group_id() or ""), final=True)
+            if not _ok:
+                event.stop_event()
+                _notify = getattr(_lm, "notify", None)
+                if _notify:
+                    await _notify(event, _info)
+                return
+        # ===== ledger patch end =====
 
         group_id = event.message_obj.group_id
         state_key = self._conversation_key(group_id, target_qq)
