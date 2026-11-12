@@ -3,8 +3,9 @@ AstrBot 插件：Bot同类识别器
 让Bot认识其他Bot同类，支持专属提示词、自动识别回复。
 """
 
-import sys  # ledger patch
 import re
+import sys  # ledger patch
+import time
 
 import astrbot.api.message_components as Comp
 from astrbot.api import AstrBotConfig, logger
@@ -41,6 +42,7 @@ class BotFriendPlugin(Star):
         self.config = config
         self.bot_friends = []
         self.dialogue_states: dict[str, DialogueState] = {}
+        self._state_touched: dict[str, float] = {}  # 每段对话最后一次真正回复的时间
         self._last_round_warning: tuple[int, int] | None = None
         self._reload_config()
         logger.info(f"[Bot同类] 插件已加载，同类数: {len(self.bot_friends)}")
@@ -333,6 +335,7 @@ class BotFriendPlugin(Star):
     def _reset_dialogue(self, key: str, unlimited: bool = False) -> DialogueState:
         state = self._new_dialogue_state(unlimited=unlimited)
         self.dialogue_states[key] = state
+        self._state_touched[key] = time.time()
         logger.info(f"[BotFriend] 对话状态已重置 key={key}, 轮数={state.cutoff_round}")
         return state
 
@@ -340,7 +343,13 @@ class BotFriendPlugin(Star):
         self, key: str, unlimited: bool = False
     ) -> DialogueState:
         state = self.dialogue_states.get(key)
-        if state is None:
+        try:
+            idle = float(self.config.get("auto_reset_minutes", 3) or 0) * 60
+        except (TypeError, ValueError):
+            idle = 180
+        last = self._state_touched.get(key, 0)
+        # 对方插件重置不到我这边的计数：安静了一段时间就当成新的一段对话
+        if state is None or (idle > 0 and time.time() - last > idle):
             state = self._reset_dialogue(key, unlimited=unlimited)
         return state
 
@@ -641,6 +650,7 @@ class BotFriendPlugin(Star):
                 return
 
             state.add_message("A", msg)
+            self._state_touched[state_key] = time.time()
             next_round = state.completed_rounds + 1
             is_final_round = bool(
                 group_id and next_round == state.cutoff_round
