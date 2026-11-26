@@ -23,6 +23,18 @@
     "hint": "两个Bot之间安静超过这么久，下一次再说话就当成新的一段对话，重新计算轮数。设为0则不自动重置（只能用“重置bot对话”指令）",
     "default": 3
   },
+  "forw_delay_min": {
+    "description": "forw 发送延迟下限（秒）",
+    "type": "float",
+    "default": 2,
+    "hint": "forw 收到后至少等这么久再发。等待期间原消息被撤回就不转发、不扣费。"
+  },
+  "forw_delay_max": {
+    "description": "forw 发送延迟上限（秒）",
+    "type": "float",
+    "default": 3,
+    "hint": "最多等这么久。每次在上下限之间随机取一个时间。上下限都填 0 为立即发送，两个填一样就是固定延迟。"
+  },
   "bot_friend_1": {
     "description": "Bot同类 ①",
     "type": "object",

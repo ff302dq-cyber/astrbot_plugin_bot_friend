@@ -3,6 +3,8 @@ AstrBot 插件：Bot同类识别器
 让Bot认识其他Bot同类，支持专属提示词、自动识别回复。
 """
 
+import asyncio  # recall patch
+import random  # recall patch
 import re
 import sys  # ledger patch
 import time
@@ -13,6 +15,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 
+from ._recall_shim import is_recalled  # recall patch
 from .dialogue_director import (
     DialogueState,
     assess_reply,
@@ -32,7 +35,7 @@ DEFAULT_REPLY_FORMAT_PROMPT = (
     "bot_friend_recognizer",
     "YourName",
     "让Bot认识其他Bot同类，支持专属提示词",
-    "4.4",
+    "4.9",
     "https://github.com/ff302dq-cyber/astrbot_plugin_bot_friend"
 )
 class BotFriendPlugin(Star):
@@ -522,6 +525,23 @@ class BotFriendPlugin(Star):
 
         wake_prefix = bot_info.get("wake_prefix", "")
         target_qq = str(bot_info["qq"])
+
+        # ===== recall patch：forw 稍等一会儿再发，这期间原消息被撤回就不发、也不扣费 =====
+        try:
+            lo = max(0.0, float(self.config.get("forw_delay_min", 2) or 0))
+            hi = max(0.0, float(self.config.get("forw_delay_max", 3) or 0))
+        except (TypeError, ValueError):
+            lo = hi = 0.0
+        if lo > hi:
+            lo, hi = hi, lo  # 上下限填反了也照样能用
+        if hi > 0:
+            event.stop_event()  # 先截住，别让其他插件在等待期间处理这条
+            await asyncio.sleep(random.uniform(lo, hi))
+            if is_recalled(event):
+                logger.info(f"[BotFriend] forw原消息已撤回，取消转发: {name}")
+                return
+        # ===== recall patch end =====
+
         logger.info(f"[BotFriend] forw硬转发: {name}, 对方唤醒词:{wake_prefix}")
 
         # ===== 话费账本（ledger patch）：forw 由发起的人付 1 次 =====
